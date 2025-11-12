@@ -1,0 +1,25 @@
+# Core Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-dotenv==1.0.0
+
+# Database
+sqlalchemy
+asyncpg
+alembic
+
+# Authentication
+authlib
+httpx
+itsdangerous
+
+# WebSocket Support
+websockets
+
+# Validation
+pydantic
+email-validator
+
+# CORS and Sessions
+starlette
+
