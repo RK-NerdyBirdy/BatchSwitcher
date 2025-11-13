@@ -86,7 +86,9 @@ async def root():
         "status": "running"
     }
 
-
+@app.head("/")
+async def head_root():
+    return Response(status_code=200)
 # Health check endpoint
 @app.get("/health", tags=["Health"])
 async def health_check():
