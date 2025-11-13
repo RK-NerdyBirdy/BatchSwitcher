@@ -5,7 +5,7 @@ A FastAPI-based system for students to swap batches based on CGPA eligibility.
 Author: Your Name
 Version: 1.0.0
 """
-from fastapi import FastAPI
+from fastapi import FastAPI,Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from contextlib import asynccontextmanager
@@ -89,6 +89,7 @@ async def root():
 @app.head("/")
 async def head_root():
     return Response(status_code=200)
+
 # Health check endpoint
 @app.get("/health", tags=["Health"])
 async def health_check():
