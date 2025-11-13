@@ -21,16 +21,16 @@ async def lifespan(app: FastAPI):
     Lifespan context manager for startup and shutdown events
     """
     # Startup
-    print("🚀 Starting Batch Swap Platform...")
+    print("Starting Batch Swap Platform...")
     await init_db()
-    print("✅ Database initialized")
+    print("Database initialized :))))))")
     
     yield
     
     # Shutdown
-    print("🛑 Shutting down...")
+    print("Shutting down...")
     await close_db()
-    print("✅ Cleanup complete")
+    print("Cleanup complete")
 
 
 # Create FastAPI application
