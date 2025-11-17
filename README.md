@@ -1,4 +1,4 @@
-# Batch Swap Platform
+# BatchSwitcher
 
 A FastAPI-based platform that enables VIT students to swap class batches based on CGPA eligibility.
 
