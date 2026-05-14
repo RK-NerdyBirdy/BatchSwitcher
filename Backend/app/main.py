@@ -17,9 +17,10 @@ app = FastAPI(
 # Note: This is for OAuth flow only, not for admin API auth (which uses JWT)
 app.add_middleware(SessionMiddleware, secret_key=settings.SESSION_SECRET_KEY)
 app.include_router(api_router, prefix="/api")
-@app.get("/pinggg")
+# Notice the .api_route here!
+@app.api_route("/pinggg", methods=["GET", "HEAD"])
 async def ping():
-    return {"ping":"ponggg"}
+    return {"status": "awake"}
 
 @app.get("/health")
 async def health_check():
