@@ -12,3 +12,4 @@ authlib
 pwdlib[bcrypt]
 httpx
 PyJWT
+itsdangerous
