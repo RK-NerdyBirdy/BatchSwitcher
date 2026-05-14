@@ -1,15 +1,22 @@
+# --- Core Framework & Server ---
 fastapi
 uvicorn[standard]
+python-multipart
+
+# --- Database & Migrations ---
 sqlalchemy[asyncio]
 asyncpg
 alembic
+
+# --- Validation & Configuration ---
 pydantic
 pydantic-settings
 email-validator
 python-dotenv
-python-multipart
+
+# --- Authentication & Security ---
 authlib
-pwdlib[bcrypt]
 httpx
+pwdlib[bcrypt]
 PyJWT
 itsdangerous
