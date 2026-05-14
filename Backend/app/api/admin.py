@@ -1,10 +1,16 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.crud.student_bulk import bulk_create_students_with_assignments
 from app.crud.batch import create_semester, list_semesters, get_semester, create_batch, list_batches
-from app.crud.swap_request import get_swap_request, update_swap_request_status, execute_batch_swap
+from app.crud.swap_request import (
+    execute_batch_swap,
+    get_assignment_by_id,
+    get_swap_request_for_update,
+)
 from app.dependencies.admin_auth import get_current_admin
 from app.models.admin import Admin
 from app.schemas.student import StudentCreate, StudentResponse
@@ -195,50 +201,50 @@ async def approve_swap_request(
     db: AsyncSession = Depends(get_db),
     current_admin: Admin = Depends(get_current_admin),
 ) -> SwapRequestResponseWithDetails:
-    swap_request = await get_swap_request(db, request_id)
-    if not swap_request:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Swap request not found",
+    async with db.begin():
+        swap_request = await get_swap_request_for_update(db, request_id)
+        if not swap_request:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Swap request not found",
+            )
+
+        if swap_request.status != "ACCEPTED":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Swap request must be accepted by the student before approval",
+            )
+
+        # Execute the batch swap
+        swap_result = await execute_batch_swap(
+            db,
+            swap_request.requester_assignment_id,
+            swap_request.target_assignment_id,
+            commit=False,
+            lock=True,
         )
 
-    if swap_request.status != "ACCEPTED":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Swap request must be accepted by the student before approval",
-        )
+        if not swap_result:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to execute batch swap",
+            )
 
-    # Execute the batch swap
-    swap_result = await execute_batch_swap(
-        db,
-        swap_request.requester_assignment_id,
-        swap_request.target_assignment_id,
-    )
-    
-    if not swap_result:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to execute batch swap",
-        )
-    
-    requester_assignment, target_assignment = swap_result
+        requester_assignment, target_assignment = swap_result
 
-    # Update the swap request status to APPROVED
-    updated = await update_swap_request_status(
-        db,
-        request_id,
-        "APPROVED",
-        current_admin.admin_id,
-    )
+        swap_request.status = "APPROVED"
+        swap_request.approved_by = current_admin.admin_id
+        swap_request.approved_at = datetime.now(timezone.utc)
+        await db.flush()
 
     return SwapRequestResponseWithDetails(
-        request_id=updated.request_id,
-        requester_assignment_id=updated.requester_assignment_id,
-        target_assignment_id=updated.target_assignment_id,
-        status=updated.status,
-        approved_by=updated.approved_by,
-        approved_at=updated.approved_at,
-        created_at=updated.created_at,
+        request_id=swap_request.request_id,
+        requester_assignment_id=swap_request.requester_assignment_id,
+        target_assignment_id=swap_request.target_assignment_id,
+        status=swap_request.status,
+        approved_by=swap_request.approved_by,
+        approved_at=swap_request.approved_at,
+        created_at=swap_request.created_at,
         requester_assignment=requester_assignment,
         target_assignment=target_assignment,
     )
@@ -250,36 +256,42 @@ async def reject_swap_request(
     db: AsyncSession = Depends(get_db),
     current_admin: Admin = Depends(get_current_admin),
 ) -> SwapRequestResponseWithDetails:
-    swap_request = await get_swap_request(db, request_id)
-    if not swap_request:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Swap request not found",
-        )
+    async with db.begin():
+        swap_request = await get_swap_request_for_update(db, request_id)
+        if not swap_request:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Swap request not found",
+            )
 
-    if swap_request.status in {"APPROVED", "CANCELLED"}:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Swap request cannot be rejected in its current state",
-        )
+        if swap_request.status in {"APPROVED", "CANCELLED"}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Swap request cannot be rejected in its current state",
+            )
 
-    updated = await update_swap_request_status(
-        db,
-        request_id,
-        "REJECTED",
-        current_admin.admin_id,
+        swap_request.status = "REJECTED"
+        swap_request.approved_by = current_admin.admin_id
+        swap_request.approved_at = datetime.now(timezone.utc)
+        await db.flush()
+
+    requester_assignment = await get_assignment_by_id(
+        db, swap_request.requester_assignment_id
+    )
+    target_assignment = await get_assignment_by_id(
+        db, swap_request.target_assignment_id
     )
 
     return SwapRequestResponseWithDetails(
-        request_id=updated.request_id,
-        requester_assignment_id=updated.requester_assignment_id,
-        target_assignment_id=updated.target_assignment_id,
-        status=updated.status,
-        approved_by=updated.approved_by,
-        approved_at=updated.approved_at,
-        created_at=updated.created_at,
-        requester_assignment=updated.requester_assignment,
-        target_assignment=updated.target_assignment,
+        request_id=swap_request.request_id,
+        requester_assignment_id=swap_request.requester_assignment_id,
+        target_assignment_id=swap_request.target_assignment_id,
+        status=swap_request.status,
+        approved_by=swap_request.approved_by,
+        approved_at=swap_request.approved_at,
+        created_at=swap_request.created_at,
+        requester_assignment=requester_assignment,
+        target_assignment=target_assignment,
     )
 
 

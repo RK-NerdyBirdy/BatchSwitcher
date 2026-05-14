@@ -16,6 +16,13 @@ class SwapRequest(Base):
             "requester_assignment_id <> target_assignment_id",
             name="ck_swap_request_different_assignments",
         ),
+        sa.Index(
+            "uq_swap_request_active_pair",
+            sa.text("LEAST(requester_assignment_id, target_assignment_id)"),
+            sa.text("GREATEST(requester_assignment_id, target_assignment_id)"),
+            unique=True,
+            postgresql_where=sa.text("status IN ('PENDING','ACCEPTED')"),
+        ),
     )
 
     request_id: Mapped[int] = mapped_column(Integer, primary_key=True)

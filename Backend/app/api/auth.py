@@ -108,32 +108,3 @@ async def admin_logout() -> dict:
     """Logout endpoint (stateless JWT - just discard token on client side)."""
     return {"ok": True, "message": "Please discard the token on the client side"}
 
-
-@router.post("/admin/register", response_model=AdminResponse, status_code=status.HTTP_201_CREATED)
-async def register_admin(
-    payload: AdminCreate,
-    db: AsyncSession = Depends(get_db),
-) -> AdminResponse:
-    """Register a new admin (first-time bootstrap only).
-    
-    In production, restrict this endpoint or remove it entirely.
-    Admins should be created by superuser/CLI only.
-    """
-    existing = await get_admin_by_email(db, payload.admin_email)
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Admin with this email already exists",
-        )
-
-    password_hash = get_password_hash(payload.password)
-    admin = Admin(
-        admin_name=payload.admin_name,
-        admin_email=payload.admin_email,
-        password_hash=password_hash,
-        password_initial_change=False,
-    )
-    db.add(admin)
-    await db.commit()
-    await db.refresh(admin)
-    return admin

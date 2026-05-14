@@ -29,12 +29,24 @@ async def get_swap_request(db: AsyncSession, request_id: int) -> SwapRequest | N
     return result.scalar_one_or_none()
 
 
+async def get_swap_request_for_update(
+    db: AsyncSession,
+    request_id: int,
+) -> SwapRequest | None:
+    result = await db.execute(
+        select(SwapRequest)
+        .where(SwapRequest.request_id == request_id)
+        .with_for_update()
+    )
+    return result.scalar_one_or_none()
+
+
 async def get_active_swap_request_between(
     db: AsyncSession,
     requester_assignment_id: int,
     target_assignment_id: int,
 ) -> SwapRequest | None:
-    active_statuses = ["PENDING", "ACCEPTED", "APPROVED"]
+    active_statuses = ["PENDING", "ACCEPTED"]
     result = await db.execute(
         select(SwapRequest)
         .where(
@@ -88,6 +100,30 @@ async def get_assignment_by_id(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def get_assignment_by_id_for_update(
+    db: AsyncSession,
+    assignment_id: int,
+) -> StudentSemesterAssignment | None:
+    result = await db.execute(
+        select(StudentSemesterAssignment)
+        .where(StudentSemesterAssignment.assignment_id == assignment_id)
+        .with_for_update()
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_assignments_by_register_number_for_update(
+    db: AsyncSession,
+    register_number: str,
+) -> list[StudentSemesterAssignment]:
+    result = await db.execute(
+        select(StudentSemesterAssignment)
+        .where(StudentSemesterAssignment.register_number == register_number)
+        .with_for_update()
+    )
+    return list(result.scalars().all())
 
 
 async def get_student_assignments_by_semester(
@@ -170,27 +206,37 @@ async def execute_batch_swap(
     db: AsyncSession,
     requester_assignment_id: int,
     target_assignment_id: int,
+    commit: bool = True,
+    lock: bool = True,
 ) -> tuple[StudentSemesterAssignment, StudentSemesterAssignment] | None:
     """Execute batch swap for two students in a swap request.
-    
+
     Returns:
         Tuple of (updated_requester_assignment, updated_target_assignment) or None if failed
     """
-    requester = await get_assignment_by_id(db, requester_assignment_id)
-    target = await get_assignment_by_id(db, target_assignment_id)
-    
+    if lock:
+        requester = await get_assignment_by_id_for_update(db, requester_assignment_id)
+        target = await get_assignment_by_id_for_update(db, target_assignment_id)
+    else:
+        requester = await get_assignment_by_id(db, requester_assignment_id)
+        target = await get_assignment_by_id(db, target_assignment_id)
+
     if not requester or not target:
         return None
-    
+
     # Swap batch IDs
     requester_batch = requester.batch_id
     requester.batch_id = target.batch_id
     target.batch_id = requester_batch
-    
+
     db.add(requester)
     db.add(target)
-    await db.commit()
-    await db.refresh(requester)
-    await db.refresh(target)
-    
+
+    if commit:
+        await db.commit()
+        await db.refresh(requester)
+        await db.refresh(target)
+    else:
+        await db.flush()
+
     return requester, target

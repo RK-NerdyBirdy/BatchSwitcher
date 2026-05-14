@@ -8,12 +8,13 @@ from app.crud.student import get_student_by_email, get_student
 from app.crud.swap_request import (
     create_swap_request as create_swap_request_crud,
     get_assignment_by_id,
+    get_assignment_by_id_for_update,
     get_all_student_assignments,
+    get_assignments_by_register_number_for_update,
     get_active_swap_request_between,
-    get_swap_request,
+    get_swap_request_for_update,
     has_accepted_request_for_assignments,
     list_swap_requests_for_assignments,
-    update_swap_request_status,
 )
 from app.dependencies.student_auth import get_current_student
 from app.schemas.swap_request import (
@@ -230,6 +231,12 @@ async def create_swap_request_endpoint(
         swap_request = await create_swap_request_crud(db, payload)
     except IntegrityError as error:
         await db.rollback()
+        if "uq_swap_request_active_pair" in str(error.orig):
+            translated_error = HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A swap request already exists between these students",
+            )
+            raise translated_error from error
         if "swap_request_pkey" in str(error.orig):
             await db.execute(
                 text(
@@ -284,51 +291,80 @@ async def accept_swap_request(
             detail="Student not found",
         )
 
-    swap_request = await get_swap_request(db, request_id)
-    if not swap_request:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Swap request not found",
-        )
+    async with db.begin():
+        swap_request = await get_swap_request_for_update(db, request_id)
+        if not swap_request:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Swap request not found",
+            )
 
-    target_assignment = await get_assignment_by_id(db, swap_request.target_assignment_id)
-    if not target_assignment or target_assignment.register_number != student.register_number:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You are not authorized to accept this request",
-        )
+        if swap_request.status != "PENDING":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Swap request is not pending",
+            )
 
-    if swap_request.status != "PENDING":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Swap request is not pending",
+        target_assignment = await get_assignment_by_id_for_update(
+            db, swap_request.target_assignment_id
         )
+        if not target_assignment or target_assignment.register_number != student.register_number:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not authorized to accept this request",
+            )
 
-    assignments = await get_all_student_assignments(db, student.register_number)
-    assignment_ids = [assignment.assignment_id for assignment in assignments]
-    has_active = await has_accepted_request_for_assignments(
-        db,
-        assignment_ids,
-        exclude_request_id=request_id,
-    )
-    if has_active:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You already have an accepted swap request",
+        requester_assignment = await get_assignment_by_id_for_update(
+            db, swap_request.requester_assignment_id
         )
+        if not requester_assignment:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Requester assignment not found",
+            )
 
-    updated = await update_swap_request_status(db, request_id, "ACCEPTED")
-    requester_assignment = await get_assignment_by_id(db, updated.requester_assignment_id)
-    target_assignment = await get_assignment_by_id(db, updated.target_assignment_id)
+        register_numbers = sorted(
+            {requester_assignment.register_number, target_assignment.register_number}
+        )
+        if len(register_numbers) == 1:
+            requester_assignments = await get_assignments_by_register_number_for_update(
+                db, register_numbers[0]
+            )
+            target_assignments = requester_assignments
+        else:
+            requester_assignments = await get_assignments_by_register_number_for_update(
+                db, register_numbers[0]
+            )
+            target_assignments = await get_assignments_by_register_number_for_update(
+                db, register_numbers[1]
+            )
+
+        assignment_ids = {
+            assignment.assignment_id
+            for assignment in (requester_assignments + target_assignments)
+        }
+        has_active = await has_accepted_request_for_assignments(
+            db,
+            list(assignment_ids),
+            exclude_request_id=request_id,
+        )
+        if has_active:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="One of the students already has an accepted swap request",
+            )
+
+        swap_request.status = "ACCEPTED"
+        await db.flush()
 
     return SwapRequestResponseWithDetails(
-        request_id=updated.request_id,
-        requester_assignment_id=updated.requester_assignment_id,
-        target_assignment_id=updated.target_assignment_id,
-        status=updated.status,
-        approved_by=updated.approved_by,
-        approved_at=updated.approved_at,
-        created_at=updated.created_at,
+        request_id=swap_request.request_id,
+        requester_assignment_id=swap_request.requester_assignment_id,
+        target_assignment_id=swap_request.target_assignment_id,
+        status=swap_request.status,
+        approved_by=swap_request.approved_by,
+        approved_at=swap_request.approved_at,
+        created_at=swap_request.created_at,
         requester_assignment=requester_assignment,
         target_assignment=target_assignment,
     )
@@ -348,38 +384,49 @@ async def reject_swap_request(
             detail="Student not found",
         )
 
-    swap_request = await get_swap_request(db, request_id)
-    if not swap_request:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Swap request not found",
-        )
+    async with db.begin():
+        swap_request = await get_swap_request_for_update(db, request_id)
+        if not swap_request:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Swap request not found",
+            )
 
-    target_assignment = await get_assignment_by_id(db, swap_request.target_assignment_id)
-    if not target_assignment or target_assignment.register_number != student.register_number:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You are not authorized to reject this request",
-        )
+        if swap_request.status != "PENDING":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Swap request is not pending",
+            )
 
-    if swap_request.status != "PENDING":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Swap request is not pending",
+        target_assignment = await get_assignment_by_id_for_update(
+            db, swap_request.target_assignment_id
         )
+        if not target_assignment or target_assignment.register_number != student.register_number:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not authorized to reject this request",
+            )
 
-    updated = await update_swap_request_status(db, request_id, "REJECTED")
-    requester_assignment = await get_assignment_by_id(db, updated.requester_assignment_id)
-    target_assignment = await get_assignment_by_id(db, updated.target_assignment_id)
+        requester_assignment = await get_assignment_by_id_for_update(
+            db, swap_request.requester_assignment_id
+        )
+        if not requester_assignment:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Requester assignment not found",
+            )
+
+        swap_request.status = "REJECTED"
+        await db.flush()
 
     return SwapRequestResponseWithDetails(
-        request_id=updated.request_id,
-        requester_assignment_id=updated.requester_assignment_id,
-        target_assignment_id=updated.target_assignment_id,
-        status=updated.status,
-        approved_by=updated.approved_by,
-        approved_at=updated.approved_at,
-        created_at=updated.created_at,
+        request_id=swap_request.request_id,
+        requester_assignment_id=swap_request.requester_assignment_id,
+        target_assignment_id=swap_request.target_assignment_id,
+        status=swap_request.status,
+        approved_by=swap_request.approved_by,
+        approved_at=swap_request.approved_at,
+        created_at=swap_request.created_at,
         requester_assignment=requester_assignment,
         target_assignment=target_assignment,
     )
@@ -399,39 +446,49 @@ async def cancel_swap_request(
             detail="Student not found",
         )
 
-    swap_request = await get_swap_request(db, request_id)
-    if not swap_request:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Swap request not found",
-        )
+    async with db.begin():
+        swap_request = await get_swap_request_for_update(db, request_id)
+        if not swap_request:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Swap request not found",
+            )
 
-    requester_assignment = await get_assignment_by_id(
-        db, swap_request.requester_assignment_id
-    )
-    if not requester_assignment or requester_assignment.register_number != student.register_number:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You are not authorized to cancel this request",
-        )
+        if swap_request.status == "APPROVED":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Approved swap requests cannot be cancelled",
+            )
 
-    if swap_request.status == "APPROVED":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Approved swap requests cannot be cancelled",
+        requester_assignment = await get_assignment_by_id_for_update(
+            db, swap_request.requester_assignment_id
         )
+        if not requester_assignment or requester_assignment.register_number != student.register_number:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not authorized to cancel this request",
+            )
 
-    updated = await update_swap_request_status(db, request_id, "CANCELLED")
-    target_assignment = await get_assignment_by_id(db, updated.target_assignment_id)
+        target_assignment = await get_assignment_by_id_for_update(
+            db, swap_request.target_assignment_id
+        )
+        if not target_assignment:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Target assignment not found",
+            )
+
+        swap_request.status = "CANCELLED"
+        await db.flush()
 
     return SwapRequestResponseWithDetails(
-        request_id=updated.request_id,
-        requester_assignment_id=updated.requester_assignment_id,
-        target_assignment_id=updated.target_assignment_id,
-        status=updated.status,
-        approved_by=updated.approved_by,
-        approved_at=updated.approved_at,
-        created_at=updated.created_at,
+        request_id=swap_request.request_id,
+        requester_assignment_id=swap_request.requester_assignment_id,
+        target_assignment_id=swap_request.target_assignment_id,
+        status=swap_request.status,
+        approved_by=swap_request.approved_by,
+        approved_at=swap_request.approved_at,
+        created_at=swap_request.created_at,
         requester_assignment=requester_assignment,
         target_assignment=target_assignment,
     )

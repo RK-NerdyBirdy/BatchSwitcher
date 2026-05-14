@@ -206,3 +206,4 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 Backend/sample_students.csv
+Backend/alembic.ini

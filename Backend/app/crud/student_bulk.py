@@ -18,7 +18,6 @@ async def _reset_assignment_sequence(db: AsyncSession) -> None:
             ")"
         )
     )
-    await db.commit()
 
 
 async def _create_student_and_assignment(
@@ -69,51 +68,53 @@ async def bulk_create_students_with_assignments(
 
     for payload in payloads:
         try:
-            # Validate semester exists BEFORE creating anything
-            semester_result = await db.execute(
-                select(Semester).where(Semester.semester_id == payload.semester_id)
-            )
-            semester = semester_result.scalar_one_or_none()
-            if not semester:
-                failed.append({
-                    "payload": payload,
-                    "error": f"Semester {payload.semester_id} not found",
-                })
-                continue
-            
-            # Validate batch exists AND belongs to the semester BEFORE creating anything
-            batch_result = await db.execute(
-                select(Batch).where(
-                    (Batch.batch_id == payload.batch_id) &
-                    (Batch.semester_id == payload.semester_id)
+            async with db.begin_nested():
+                # Validate semester exists BEFORE creating anything
+                semester_result = await db.execute(
+                    select(Semester).where(Semester.semester_id == payload.semester_id)
                 )
-            )
-            batch = batch_result.scalar_one_or_none()
-            if not batch:
-                failed.append({
-                    "payload": payload,
-                    "error": f"Batch {payload.batch_id} not found in semester {payload.semester_id}",
+                semester = semester_result.scalar_one_or_none()
+                if not semester:
+                    failed.append({
+                        "payload": payload,
+                        "error": f"Semester {payload.semester_id} not found",
+                    })
+                    continue
+
+                # Validate batch exists AND belongs to the semester BEFORE creating anything
+                batch_result = await db.execute(
+                    select(Batch).where(
+                        (Batch.batch_id == payload.batch_id)
+                        & (Batch.semester_id == payload.semester_id)
+                    )
+                )
+                batch = batch_result.scalar_one_or_none()
+                if not batch:
+                    failed.append({
+                        "payload": payload,
+                        "error": (
+                            f"Batch {payload.batch_id} not found in semester {payload.semester_id}"
+                        ),
+                    })
+                    continue
+
+                student, assignment = await _create_student_and_assignment(db, payload)
+                created.append({
+                    "student": student,
+                    "assignment": assignment,
                 })
-                continue
-            
-            student, assignment = await _create_student_and_assignment(db, payload)
-            created.append({
-                "student": student,
-                "assignment": assignment,
-            })
         except IntegrityError as e:
-            await db.rollback()
             if "student_semester_assignment_pkey" in str(e.orig):
                 await _reset_assignment_sequence(db)
                 try:
-                    student, assignment = await _create_student_and_assignment(db, payload)
-                    created.append({
-                        "student": student,
-                        "assignment": assignment,
-                    })
-                    continue
+                    async with db.begin_nested():
+                        student, assignment = await _create_student_and_assignment(db, payload)
+                        created.append({
+                            "student": student,
+                            "assignment": assignment,
+                        })
+                        continue
                 except IntegrityError:
-                    await db.rollback()
                     failed.append({
                         "payload": payload,
                         "error": "Assignment id sequence was reset but insert still failed",
@@ -128,7 +129,6 @@ async def bulk_create_students_with_assignments(
                 error_msg = f"Student already assigned to semester {payload.semester_id}"
             failed.append({"payload": payload, "error": error_msg})
         except Exception as e:
-            await db.rollback()
             failed.append({"payload": payload, "error": str(e)})
 
     if created:
