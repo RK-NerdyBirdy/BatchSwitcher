@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException, status
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
-from jose import jwt
+import jwt
 
 from app.core.config import get_settings
 from app.models.student import Student
