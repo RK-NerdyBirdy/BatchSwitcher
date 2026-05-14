@@ -21,6 +21,10 @@ app.include_router(api_router, prefix="/api")
 async def ping():
     return {"ping":"ponggg"}
 
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
