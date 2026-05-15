@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
 from starlette.middleware.sessions import SessionMiddleware
+from fastapi.middleware.cors import CORSMiddleware  
 
 from app.api.router import api_router
 from app.core.config import get_settings
@@ -13,10 +14,26 @@ app = FastAPI(
     version="1.0.0",
 )
 
+# ==========================================
+# CORS MIDDLEWARE SETUP
+# Must be added before the router!
+# ==========================================
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",  # Allows your local frontend to connect
+        # "https://your-production-domain.vercel.app", # <-- Uncomment and add your real frontend URL later!
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods (GET, POST, PUT, DELETE, etc.)
+    allow_headers=["*"],  # Allows all headers
+)
+
 # SessionMiddleware is required for OAuth state management (used internally by Authlib)
 # Note: This is for OAuth flow only, not for admin API auth (which uses JWT)
 app.add_middleware(SessionMiddleware, secret_key=settings.SESSION_SECRET_KEY)
 app.include_router(api_router, prefix="/api")
+
 # Notice the .api_route here!
 @app.api_route("/pinggg", methods=["GET", "HEAD"])
 async def ping():
@@ -60,9 +77,4 @@ def custom_openapi():
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 
-
-
-
 app.openapi = custom_openapi
-
-
