@@ -29,3 +29,15 @@ class AdminLoginResponse(AdminBase):
     admin_id: int
     access_token: str
     token_type: str = "bearer"
+    password_initial: bool
+
+
+
+
+class AdminChangePassword(BaseModel):
+    current_password: str = Field(..., min_length=8)
+    new_password: str = Field(..., min_length=8)
+
+
+class AdminChangePasswordResponse(BaseModel):
+    message: str

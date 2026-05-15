@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security import get_password_hash, verify_password
 from app.core.database import get_db
 from app.crud.student_bulk import bulk_create_students_with_assignments
 from app.crud.batch import create_semester, list_semesters, get_semester, create_batch, list_batches
@@ -15,6 +16,7 @@ from app.dependencies.admin_auth import get_current_admin
 from app.models.admin import Admin
 from app.schemas.student import StudentCreate, StudentResponse
 from app.schemas.batch import SemesterCreate, SemesterResponse, BatchCreate, BatchResponse
+from app.schemas.admin import AdminChangePassword, AdminChangePasswordResponse
 from app.schemas.swap_request import SwapRequestResponseWithDetails
 from app.services.csv_service import csv_service, CSVParsingError
 
@@ -193,6 +195,31 @@ async def batch_stats_by_semester(
 ) -> dict:
     from app.services.analytics_service import analytics_service
     return await analytics_service.batch_stats_by_semester(db, semester_id)
+
+
+@router.patch("/change-password", response_model=AdminChangePasswordResponse)
+async def change_admin_password(
+    payload: AdminChangePassword,
+    db: AsyncSession = Depends(get_db),
+    current_admin: Admin = Depends(get_current_admin),
+) -> AdminChangePasswordResponse:
+    if not verify_password(payload.current_password, current_admin.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid current password",
+        )
+
+    if verify_password(payload.new_password, current_admin.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be different from current password",
+        )
+
+    current_admin.password_hash = get_password_hash(payload.new_password)
+    current_admin.password_initial_change = True
+    await db.commit()
+
+    return AdminChangePasswordResponse(message="Password updated successfully")
 
 
 @router.patch("/swap-requests/{request_id}/approve", response_model=SwapRequestResponseWithDetails)

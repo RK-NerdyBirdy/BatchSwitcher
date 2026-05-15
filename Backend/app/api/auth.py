@@ -100,6 +100,7 @@ async def admin_login(
         admin_email=admin.admin_email,
         admin_id=admin.admin_id,
         access_token=jwt_token,
+        password_initial = admin.password_initial_change,
     )
 
 
