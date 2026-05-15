@@ -215,8 +215,14 @@ async def execute_batch_swap(
         Tuple of (updated_requester_assignment, updated_target_assignment) or None if failed
     """
     if lock:
-        requester = await get_assignment_by_id_for_update(db, requester_assignment_id)
-        target = await get_assignment_by_id_for_update(db, target_assignment_id)
+        # Lock in deterministic order by assignment_id to avoid deadlocks
+        first_id, second_id = (
+            (requester_assignment_id, target_assignment_id)
+            if requester_assignment_id <= target_assignment_id
+            else (target_assignment_id, requester_assignment_id)
+        )
+        requester = await get_assignment_by_id_for_update(db, first_id)
+        target = await get_assignment_by_id_for_update(db, second_id)
     else:
         requester = await get_assignment_by_id(db, requester_assignment_id)
         target = await get_assignment_by_id(db, target_assignment_id)

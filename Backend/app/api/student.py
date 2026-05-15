@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.crud.student import get_student_by_email, get_student
+from app.models.student import Student
 from app.crud.swap_request import (
     create_swap_request as create_swap_request_crud,
     get_assignment_by_id,
@@ -16,6 +17,7 @@ from app.crud.swap_request import (
     has_accepted_request_for_assignments,
     list_swap_requests_for_assignments,
 )
+from app.models.student_semester_assignment import StudentSemesterAssignment
 from app.dependencies.student_auth import get_current_student
 from app.schemas.swap_request import (
     AssignmentResponse,
@@ -304,45 +306,44 @@ async def accept_swap_request(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Swap request is not pending",
             )
+        # Lock both assignment rows in deterministic order by assignment_id
+        a_id = swap_request.requester_assignment_id
+        b_id = swap_request.target_assignment_id
+        first_id, second_id = (a_id, b_id) if a_id <= b_id else (b_id, a_id)
 
-        target_assignment = await get_assignment_by_id_for_update(
-            db, swap_request.target_assignment_id
-        )
+        first_assignment = await get_assignment_by_id_for_update(db, first_id)
+        second_assignment = await get_assignment_by_id_for_update(db, second_id)
+
+        # Map requester/target after locking
+        if swap_request.target_assignment_id == first_assignment.assignment_id:
+            target_assignment = first_assignment
+            requester_assignment = second_assignment
+        else:
+            target_assignment = second_assignment
+            requester_assignment = first_assignment
+
         if not target_assignment or target_assignment.register_number != student.register_number:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You are not authorized to accept this request",
             )
+        # Lock both students to serialize accept operations per student
+        # Lock in deterministic order by register_number
+        reg_nums = sorted({requester_assignment.register_number, target_assignment.register_number})
+        if reg_nums:
+            for rn in reg_nums:
+                await db.execute(
+                    select(Student).where(Student.register_number == rn).with_for_update()
+                )
 
-        requester_assignment = await get_assignment_by_id_for_update(
-            db, swap_request.requester_assignment_id
+        # Gather all assignment_ids for both students
+        assignment_ids = set()
+        result = await db.execute(
+            select(StudentSemesterAssignment.assignment_id).where(
+                StudentSemesterAssignment.register_number.in_(reg_nums)
+            )
         )
-        if not requester_assignment:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Requester assignment not found",
-            )
-
-        register_numbers = sorted(
-            {requester_assignment.register_number, target_assignment.register_number}
-        )
-        if len(register_numbers) == 1:
-            requester_assignments = await get_assignments_by_register_number_for_update(
-                db, register_numbers[0]
-            )
-            target_assignments = requester_assignments
-        else:
-            requester_assignments = await get_assignments_by_register_number_for_update(
-                db, register_numbers[0]
-            )
-            target_assignments = await get_assignments_by_register_number_for_update(
-                db, register_numbers[1]
-            )
-
-        assignment_ids = {
-            assignment.assignment_id
-            for assignment in (requester_assignments + target_assignments)
-        }
+        assignment_ids.update([row[0] for row in result.all()])
         has_active = await has_accepted_request_for_assignments(
             db,
             list(assignment_ids),
