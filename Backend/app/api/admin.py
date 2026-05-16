@@ -11,6 +11,7 @@ from app.crud.swap_request import (
     execute_batch_swap,
     get_assignment_by_id,
     get_swap_request_for_update,
+    list_accepted_swap_requests,
 )
 from app.dependencies.admin_auth import get_current_admin
 from app.models.admin import Admin
@@ -197,6 +198,28 @@ async def batch_stats_by_semester(
     return await analytics_service.batch_stats_by_semester(db, semester_id)
 
 
+@router.get("/swap-requests/accepted", response_model=list[SwapRequestResponseWithDetails])
+async def list_accepted_swap_requests_endpoint(
+    db: AsyncSession = Depends(get_db),
+    current_admin: Admin = Depends(get_current_admin),
+) -> list[SwapRequestResponseWithDetails]:
+    accepted_requests = await list_accepted_swap_requests(db)
+    return [
+        SwapRequestResponseWithDetails(
+            request_id=request.request_id,
+            requester_assignment_id=request.requester_assignment_id,
+            target_assignment_id=request.target_assignment_id,
+            status=request.status,
+            approved_by=request.approved_by,
+            approved_at=request.approved_at,
+            created_at=request.created_at,
+            requester_assignment=request.requester_assignment,
+            target_assignment=request.target_assignment,
+        )
+        for request in accepted_requests
+    ]
+
+
 @router.patch("/change-password", response_model=AdminChangePasswordResponse)
 async def change_admin_password(
     payload: AdminChangePassword,
@@ -228,7 +251,7 @@ async def approve_swap_request(
     db: AsyncSession = Depends(get_db),
     current_admin: Admin = Depends(get_current_admin),
 ) -> SwapRequestResponseWithDetails:
-    async with db.begin():
+    try:
         swap_request = await get_swap_request_for_update(db, request_id)
         if not swap_request:
             raise HTTPException(
@@ -263,6 +286,13 @@ async def approve_swap_request(
         swap_request.approved_by = current_admin.admin_id
         swap_request.approved_at = datetime.now(timezone.utc)
         await db.flush()
+        await db.commit()
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception:
+        await db.rollback()
+        raise
 
     return SwapRequestResponseWithDetails(
         request_id=swap_request.request_id,
@@ -283,7 +313,7 @@ async def reject_swap_request(
     db: AsyncSession = Depends(get_db),
     current_admin: Admin = Depends(get_current_admin),
 ) -> SwapRequestResponseWithDetails:
-    async with db.begin():
+    try:
         swap_request = await get_swap_request_for_update(db, request_id)
         if not swap_request:
             raise HTTPException(
@@ -301,6 +331,13 @@ async def reject_swap_request(
         swap_request.approved_by = current_admin.admin_id
         swap_request.approved_at = datetime.now(timezone.utc)
         await db.flush()
+        await db.commit()
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception:
+        await db.rollback()
+        raise
 
     requester_assignment = await get_assignment_by_id(
         db, swap_request.requester_assignment_id

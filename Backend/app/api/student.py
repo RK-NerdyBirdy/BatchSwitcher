@@ -14,6 +14,7 @@ from app.crud.swap_request import (
     get_assignments_by_register_number_for_update,
     get_active_swap_request_between,
     get_swap_request_for_update,
+    has_approved_request_for_assignments,
     has_accepted_request_for_assignments,
     list_swap_requests_for_assignments,
 )
@@ -175,6 +176,16 @@ async def create_swap_request_endpoint(
             detail="Student not found",
         )
 
+    student_assignments = await get_all_student_assignments(db, student.register_number)
+    if await has_approved_request_for_assignments(
+        db,
+        [assignment.assignment_id for assignment in student_assignments],
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You already have an approved swap request and cannot create a new one",
+        )
+
     requester = await get_assignment_by_id(db, payload.requester_assignment_id)
     if not requester:
         raise HTTPException(
@@ -293,7 +304,7 @@ async def accept_swap_request(
             detail="Student not found",
         )
 
-    async with db.begin():
+    try:
         swap_request = await get_swap_request_for_update(db, request_id)
         if not swap_request:
             raise HTTPException(
@@ -357,6 +368,13 @@ async def accept_swap_request(
 
         swap_request.status = "ACCEPTED"
         await db.flush()
+        await db.commit()
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception:
+        await db.rollback()
+        raise
 
     return SwapRequestResponseWithDetails(
         request_id=swap_request.request_id,
@@ -385,7 +403,7 @@ async def reject_swap_request(
             detail="Student not found",
         )
 
-    async with db.begin():
+    try:
         swap_request = await get_swap_request_for_update(db, request_id)
         if not swap_request:
             raise HTTPException(
@@ -419,6 +437,13 @@ async def reject_swap_request(
 
         swap_request.status = "REJECTED"
         await db.flush()
+        await db.commit()
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception:
+        await db.rollback()
+        raise
 
     return SwapRequestResponseWithDetails(
         request_id=swap_request.request_id,
@@ -447,7 +472,7 @@ async def cancel_swap_request(
             detail="Student not found",
         )
 
-    async with db.begin():
+    try:
         swap_request = await get_swap_request_for_update(db, request_id)
         if not swap_request:
             raise HTTPException(
@@ -481,6 +506,13 @@ async def cancel_swap_request(
 
         swap_request.status = "CANCELLED"
         await db.flush()
+        await db.commit()
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception:
+        await db.rollback()
+        raise
 
     return SwapRequestResponseWithDetails(
         request_id=swap_request.request_id,
