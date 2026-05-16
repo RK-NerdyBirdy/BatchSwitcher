@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     SESSION_SECRET_KEY: str = "change-me"
     JWT_SECRET_KEY: str = "your-secret-key-change-this"
     JWT_EXPIRATION_MINUTES: int = 120
-
+    FRONTEND_URL: str="http://localhost:3000"
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 

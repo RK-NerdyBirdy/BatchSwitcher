@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import RedirectResponse  # <-- Added for React redirect
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -25,7 +26,7 @@ async def google_login(request: Request):
 async def google_callback(
     request: Request,
     db: AsyncSession = Depends(get_db),
-) -> dict:
+):
     oauth = get_oauth()
     token = await oauth.google.authorize_access_token(request)
     user = token.get("userinfo")
@@ -38,41 +39,23 @@ async def google_callback(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only permitted student accounts are allowed",
         )
-    email = (user or {}).get("email")
-    if not email:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
 
-    # --- ADD THIS DEBUG BLOCK ---
-    try:
-        auth_service.ensure_google_email_verified(user or {})
-        print("✅ Email is verified by Google")
-        
-        auth_service.ensure_allowed_domain(email)
-        print("✅ Domain is allowed")
-        
-        pfp_url = (user or {}).get("picture")
-        await auth_service.update_student_pfp(db, email, pfp_url)
-        print("✅ Student found in DB and PFP updated")
-    except Exception as e:
-        print(f"❌ CRASH HAPPENED HERE: {repr(e)}")
-        raise e
+    # 1. Verify Domain and Google Status
     auth_service.ensure_google_email_verified(user or {})
     auth_service.ensure_allowed_domain(email)
 
+    # 2. Update Profile Picture in DB
     pfp_url = (user or {}).get("picture")
     await auth_service.update_student_pfp(db, email, pfp_url)
 
-    # Generate JWT token for student
+    # 3. Generate JWT token for student
     student_name = (user or {}).get("name", email)
     jwt_token = auth_service.create_jwt_token(email, student_name, user_type="student", pfp_url=pfp_url)
 
-    return {
-        "access_token": jwt_token,
-        "token_type": "bearer",
-        "email": email,
-        "name": student_name,
-        "pfp_url": pfp_url,
-    }
+    # 4. Redirect to React Frontend
+    settings = get_settings()
+    frontend_redirect_url = f"{settings.FRONTEND_URL}/auth/callback?token={jwt_token}"
+    return RedirectResponse(url=frontend_redirect_url)
 
 
 @router.post("/admin/login", response_model=AdminLoginResponse)
@@ -100,7 +83,7 @@ async def admin_login(
         admin_email=admin.admin_email,
         admin_id=admin.admin_id,
         access_token=jwt_token,
-        password_initial = admin.password_initial_change,
+        password_initial=admin.password_initial_change,
     )
 
 
@@ -108,4 +91,3 @@ async def admin_login(
 async def admin_logout() -> dict:
     """Logout endpoint (stateless JWT - just discard token on client side)."""
     return {"ok": True, "message": "Please discard the token on the client side"}
-
