@@ -15,6 +15,26 @@ class AssignmentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class StudentBatchInfoResponse(BaseModel):
+    assignment_id: int
+    register_number: str
+    semester_id: int
+    batch_name: str
+    cgpa: float
+    active: bool
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SemesterSwapAllowedResponse(BaseModel):
+    semester_id: int
+    semester_name: str
+    swap_allowed: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class SwapCandidateResponse(BaseModel):
     """Student details with their assignment info for swap eligibility."""
     assignment_id: int

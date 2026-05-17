@@ -18,7 +18,7 @@ from app.models.admin import Admin
 from app.schemas.student import StudentCreate, StudentResponse
 from app.schemas.batch import SemesterCreate, SemesterResponse, BatchCreate, BatchResponse
 from app.schemas.admin import AdminChangePassword, AdminChangePasswordResponse
-from app.schemas.swap_request import SwapRequestResponseWithDetails
+from app.schemas.swap_request import SemesterSwapAllowedResponse, SwapRequestResponseWithDetails
 from app.services.csv_service import csv_service, CSVParsingError
 
 router = APIRouter(dependencies=[Depends(get_current_admin)])
@@ -196,6 +196,26 @@ async def batch_stats_by_semester(
 ) -> dict:
     from app.services.analytics_service import analytics_service
     return await analytics_service.batch_stats_by_semester(db, semester_id)
+
+
+@router.get("/semesters/{semester_id}/swap-allowed", response_model=SemesterSwapAllowedResponse)
+async def get_swap_allowed(
+    semester_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_admin: Admin = Depends(get_current_admin),
+) -> SemesterSwapAllowedResponse:
+    semester = await get_semester(db, semester_id)
+    if not semester:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Semester not found",
+        )
+
+    return SemesterSwapAllowedResponse(
+        semester_id=semester.semester_id,
+        semester_name=semester.semester_name,
+        swap_allowed=semester.swap_allowed,
+    )
 
 
 @router.get("/swap-requests/accepted", response_model=list[SwapRequestResponseWithDetails])

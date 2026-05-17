@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,10 +19,13 @@ from app.crud.swap_request import (
     list_swap_requests_for_assignments,
 )
 from app.crud.batch import get_semester
+from app.crud.batch import get_batch
 from app.models.student_semester_assignment import StudentSemesterAssignment
 from app.dependencies.student_auth import get_current_student
 from app.schemas.swap_request import (
     AssignmentResponse,
+    SemesterSwapAllowedResponse,
+    StudentBatchInfoResponse,
     SwapCandidateResponse,
     SwapRequestCreate,
     SwapRequestResponseWithDetails,
@@ -43,11 +46,11 @@ async def get_me(
     }
 
 
-@router.get("/me/batch", response_model=list[AssignmentResponse])
+@router.get("/me/batch", response_model=list[StudentBatchInfoResponse])
 async def get_my_batch(
     db: AsyncSession = Depends(get_db),
     current_student: dict = Depends(get_current_student),
-) -> list[AssignmentResponse]:
+) -> list[StudentBatchInfoResponse]:
     """Get all batch assignments for the current student across all semesters."""
     email = current_student.get("email")
     
@@ -61,7 +64,52 @@ async def get_my_batch(
     
     # Get all assignments
     assignments = await get_all_student_assignments(db, student.register_number)
-    return assignments
+    response: list[StudentBatchInfoResponse] = []
+    for assignment in assignments:
+        batch = await get_batch(db, assignment.batch_id)
+        response.append(
+            StudentBatchInfoResponse(
+                assignment_id=assignment.assignment_id,
+                register_number=assignment.register_number,
+                semester_id=assignment.semester_id,
+                batch_name=batch.batch_name if batch else "Unknown",
+                cgpa=float(assignment.cgpa),
+                active=assignment.active,
+                created_at=assignment.created_at,
+            )
+        )
+    return response
+
+
+@router.get("/swap-allowed", response_model=list[SemesterSwapAllowedResponse])
+async def get_my_swap_allowed_status(
+    db: AsyncSession = Depends(get_db),
+    current_student: dict = Depends(get_current_student),
+) -> list[SemesterSwapAllowedResponse]:
+    email = current_student.get("email")
+    student = await get_student_by_email(db, email)
+    if not student:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Student not found",
+        )
+
+    assignments = await get_all_student_assignments(db, student.register_number)
+    semester_ids = sorted({assignment.semester_id for assignment in assignments})
+
+    result: list[SemesterSwapAllowedResponse] = []
+    for semester_id in semester_ids:
+        semester = await get_semester(db, semester_id)
+        if semester:
+            result.append(
+                SemesterSwapAllowedResponse(
+                    semester_id=semester.semester_id,
+                    semester_name=semester.semester_name,
+                    swap_allowed=semester.swap_allowed,
+                )
+            )
+
+    return result
 
 
 @router.get("/swap-eligible", response_model=dict)
