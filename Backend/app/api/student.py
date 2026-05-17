@@ -18,6 +18,7 @@ from app.crud.swap_request import (
     has_accepted_request_for_assignments,
     list_swap_requests_for_assignments,
 )
+from app.crud.batch import get_semester
 from app.models.student_semester_assignment import StudentSemesterAssignment
 from app.dependencies.student_auth import get_current_student
 from app.schemas.swap_request import (
@@ -108,6 +109,8 @@ async def get_my_eligible_swaps(
                     "assignment_id": c.assignment_id,
                     "register_number": c.register_number,
                     "student_name": candidate_student.student_name if candidate_student else "Unknown",
+                    "email": candidate_student.email if candidate_student else "",
+                    "phone_number": candidate_student.phone_number if candidate_student else None,
                     "batch_id": c.batch_id,
                     "cgpa": float(c.cgpa),
                 })
@@ -210,6 +213,13 @@ async def create_swap_request_endpoint(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Both assignments must be in the same semester",
+        )
+
+    semester = await get_semester(db, requester.semester_id)
+    if not semester or not semester.swap_allowed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Swaps are not allowed for this semester",
         )
 
     if requester.batch_id == target.batch_id:
@@ -338,6 +348,14 @@ async def accept_swap_request(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You are not authorized to accept this request",
             )
+
+        semester = await get_semester(db, target_assignment.semester_id)
+        if not semester or not semester.swap_allowed:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Swaps are not allowed for this semester",
+            )
+
         # Lock both students to serialize accept operations per student
         # Lock in deterministic order by register_number
         reg_nums = sorted({requester_assignment.register_number, target_assignment.register_number})

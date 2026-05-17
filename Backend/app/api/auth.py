@@ -44,7 +44,7 @@ async def google_callback(
     if user is None:
         user = await oauth.google.parse_id_token(request, token)
 
-    email = ((user or {}).get("email") or "").strip().lower()
+    email = (user or {}).get("email")
     if not email:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -58,10 +58,9 @@ async def google_callback(
     # 1.5 Only allow students that already exist in the student table
     student = await get_student_by_email(db, email)
     if not student:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You are not registered as a student",
-        )
+        settings = get_settings()
+        error_redirect_url = f"{settings.FRONTEND_URL}/auth/callback?error=not_authorized"
+        return RedirectResponse(url=error_redirect_url)
 
     # 2. Update Profile Picture in DB
     pfp_url = (user or {}).get("picture")
