@@ -11,8 +11,6 @@ def get_oauth() -> OAuth:
         settings = get_settings()
         if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET:
             raise RuntimeError("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set")
-        if not settings.GOOGLE_REDIRECT_URI:
-            raise RuntimeError("GOOGLE_REDIRECT_URI must be set")
         oauth = OAuth()
         oauth.register(
             name="google",
@@ -20,7 +18,6 @@ def get_oauth() -> OAuth:
             client_secret=settings.GOOGLE_CLIENT_SECRET,
             server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
             client_kwargs={"scope": "openid email profile"},
-            redirect_uri=settings.GOOGLE_REDIRECT_URI,
         )
         _oauth = oauth
     return _oauth

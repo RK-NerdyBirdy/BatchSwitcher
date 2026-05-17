@@ -31,7 +31,12 @@ app.add_middleware(
 
 # SessionMiddleware is required for OAuth state management (used internally by Authlib)
 # Note: This is for OAuth flow only, not for admin API auth (which uses JWT)
-app.add_middleware(SessionMiddleware, secret_key=settings.SESSION_SECRET_KEY)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.SESSION_SECRET_KEY,
+    same_site="lax",
+    https_only=False,
+)
 app.include_router(api_router, prefix="/api")
 
 # Notice the .api_route here!

@@ -7,6 +7,7 @@ from app.core.database import get_db
 from app.core.oauth import get_oauth
 from app.core.security import verify_password, get_password_hash
 from app.crud.admin import get_admin_by_email
+from app.crud.student import get_student_by_email
 from app.models.admin import Admin
 from app.schemas.admin import AdminLogin, AdminResponse, AdminCreate, AdminLoginResponse
 from app.services.auth_service import auth_service
@@ -14,11 +15,21 @@ from app.services.auth_service import auth_service
 router = APIRouter()
 
 
+def _resolve_google_redirect_uri(request: Request) -> str:
+    settings = get_settings()
+    configured = (settings.GOOGLE_REDIRECT_URI or "").strip()
+
+    # Prefer an explicit non-localhost redirect URI when deployed.
+    if configured and "localhost" not in configured and "127.0.0.1" not in configured:
+        return configured
+
+    return str(request.url_for("google_callback"))
+
+
 @router.get("/google/login")
 async def google_login(request: Request):
     oauth = get_oauth()
-    settings = get_settings()
-    redirect_uri = settings.GOOGLE_REDIRECT_URI or str(request.url_for("google_callback"))
+    redirect_uri = _resolve_google_redirect_uri(request)
     return await oauth.google.authorize_redirect(request, redirect_uri)
 
 
@@ -33,7 +44,7 @@ async def google_callback(
     if user is None:
         user = await oauth.google.parse_id_token(request, token)
 
-    email = (user or {}).get("email")
+    email = ((user or {}).get("email") or "").strip().lower()
     if not email:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -44,13 +55,26 @@ async def google_callback(
     auth_service.ensure_google_email_verified(user or {})
     auth_service.ensure_allowed_domain(email)
 
+    # 1.5 Only allow students that already exist in the student table
+    student = await get_student_by_email(db, email)
+    if not student:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not registered as a student",
+        )
+
     # 2. Update Profile Picture in DB
     pfp_url = (user or {}).get("picture")
     await auth_service.update_student_pfp(db, email, pfp_url)
 
     # 3. Generate JWT token for student
-    student_name = (user or {}).get("name", email)
-    jwt_token = auth_service.create_jwt_token(email, student_name, user_type="student", pfp_url=pfp_url)
+    student_name = student.student_name or (user or {}).get("name", email)
+    jwt_token = auth_service.create_jwt_token(
+        email,
+        student_name,
+        user_type="student",
+        pfp_url=pfp_url,
+    )
 
     # 4. Redirect to React Frontend
     settings = get_settings()

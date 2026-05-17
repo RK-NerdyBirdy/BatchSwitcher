@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.student import Student
@@ -27,8 +27,9 @@ async def get_student(db: AsyncSession, register_number: str) -> Student | None:
 
 
 async def get_student_by_email(db: AsyncSession, email: str) -> Student | None:
+    normalized_email = email.strip().lower()
     result = await db.execute(
-        select(Student).where(Student.email == email)
+        select(Student).where(func.lower(Student.email) == normalized_email)
     )
     return result.scalar_one_or_none()
 
