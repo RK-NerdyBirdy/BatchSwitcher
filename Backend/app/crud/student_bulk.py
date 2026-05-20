@@ -1,4 +1,4 @@
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
@@ -20,9 +20,55 @@ async def _reset_assignment_sequence(db: AsyncSession) -> None:
     )
 
 
+def _normalize_name(value: str) -> str:
+    return " ".join(value.split()).strip()
+
+
+async def _get_or_create_semester(
+    db: AsyncSession,
+    semester_name: str,
+) -> Semester:
+    normalized = _normalize_name(semester_name)
+    result = await db.execute(
+        select(Semester).where(func.lower(Semester.semester_name) == normalized.lower())
+    )
+    semester = result.scalar_one_or_none()
+    if semester:
+        return semester
+
+    semester = Semester(semester_name=normalized, swap_allowed=False)
+    db.add(semester)
+    await db.flush()
+    return semester
+
+
+async def _get_or_create_batch(
+    db: AsyncSession,
+    semester_id: int,
+    batch_name: str,
+) -> Batch:
+    normalized = _normalize_name(batch_name)
+    result = await db.execute(
+        select(Batch).where(
+            (Batch.semester_id == semester_id)
+            & (func.lower(Batch.batch_name) == normalized.lower())
+        )
+    )
+    batch = result.scalar_one_or_none()
+    if batch:
+        return batch
+
+    batch = Batch(batch_name=normalized, semester_id=semester_id)
+    db.add(batch)
+    await db.flush()
+    return batch
+
+
 async def _create_student_and_assignment(
     db: AsyncSession,
     payload: StudentBatchAssignmentRow,
+    semester: Semester,
+    batch: Batch,
 ) -> tuple[Student, StudentSemesterAssignment]:
     result = await db.execute(
         select(Student).where(Student.register_number == payload.register_number)
@@ -41,8 +87,8 @@ async def _create_student_and_assignment(
 
     assignment = StudentSemesterAssignment(
         register_number=student.register_number,
-        semester_id=payload.semester_id,
-        batch_id=payload.batch_id,
+        semester_id=semester.semester_id,
+        batch_id=batch.batch_id,
         cgpa=payload.cgpa,
         active=True,
     )
@@ -69,49 +115,41 @@ async def bulk_create_students_with_assignments(
     for payload in payloads:
         try:
             async with db.begin_nested():
-                # Validate semester exists BEFORE creating anything
-                semester_result = await db.execute(
-                    select(Semester).where(Semester.semester_id == payload.semester_id)
-                )
-                semester = semester_result.scalar_one_or_none()
-                if not semester:
-                    failed.append({
-                        "payload": payload,
-                        "error": f"Semester {payload.semester_id} not found",
-                    })
-                    continue
+                semester = await _get_or_create_semester(db, payload.semester_name)
+                batch = await _get_or_create_batch(db, semester.semester_id, payload.batch_name)
 
-                # Validate batch exists AND belongs to the semester BEFORE creating anything
-                batch_result = await db.execute(
-                    select(Batch).where(
-                        (Batch.batch_id == payload.batch_id)
-                        & (Batch.semester_id == payload.semester_id)
-                    )
+                student, assignment = await _create_student_and_assignment(
+                    db,
+                    payload,
+                    semester,
+                    batch,
                 )
-                batch = batch_result.scalar_one_or_none()
-                if not batch:
-                    failed.append({
-                        "payload": payload,
-                        "error": (
-                            f"Batch {payload.batch_id} not found in semester {payload.semester_id}"
-                        ),
-                    })
-                    continue
-
-                student, assignment = await _create_student_and_assignment(db, payload)
                 created.append({
                     "student": student,
                     "assignment": assignment,
+                    "semester": semester,
+                    "batch": batch,
                 })
         except IntegrityError as e:
             if "student_semester_assignment_pkey" in str(e.orig):
                 await _reset_assignment_sequence(db)
                 try:
                     async with db.begin_nested():
-                        student, assignment = await _create_student_and_assignment(db, payload)
+                        semester = await _get_or_create_semester(db, payload.semester_name)
+                        batch = await _get_or_create_batch(
+                            db, semester.semester_id, payload.batch_name
+                        )
+                        student, assignment = await _create_student_and_assignment(
+                            db,
+                            payload,
+                            semester,
+                            batch,
+                        )
                         created.append({
                             "student": student,
                             "assignment": assignment,
+                            "semester": semester,
+                            "batch": batch,
                         })
                         continue
                 except IntegrityError:
@@ -126,7 +164,9 @@ async def bulk_create_students_with_assignments(
             elif "email" in str(e.orig):
                 error_msg = f"Duplicate email: {payload.email}"
             elif "semester_id" in str(e.orig):
-                error_msg = f"Student already assigned to semester {payload.semester_id}"
+                error_msg = (
+                    f"Student already assigned to semester {payload.semester_name}"
+                )
             failed.append({"payload": payload, "error": error_msg})
         except Exception as e:
             failed.append({"payload": payload, "error": str(e)})

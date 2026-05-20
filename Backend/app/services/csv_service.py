@@ -2,8 +2,6 @@ import csv
 import io
 from pydantic import ValidationError, BaseModel, Field, EmailStr
 
-from app.schemas.student import StudentCreate
-
 
 class StudentBatchAssignmentRow(BaseModel):
     """Schema for CSV row with batch assignment."""
@@ -11,8 +9,8 @@ class StudentBatchAssignmentRow(BaseModel):
     student_name: str = Field(..., max_length=100)
     email: EmailStr
     phone_number: str | None = Field(default=None, max_length=15)
-    semester_id: int
-    batch_id: int
+    semester_name: str = Field(..., max_length=100)
+    batch_name: str = Field(..., max_length=50)
     cgpa: float = Field(..., ge=0, le=10)
 
 
@@ -26,7 +24,14 @@ class CSVParsingError(Exception):
 class CSVService:
     """Service for parsing and validating student CSV uploads with batch assignment."""
 
-    REQUIRED_COLUMNS = {"register_number", "student_name", "email", "semester_id", "batch_id", "cgpa"}
+    REQUIRED_COLUMNS = {
+        "register_number",
+        "student_name",
+        "email",
+        "semester_name",
+        "batch_name",
+        "cgpa",
+    }
     OPTIONAL_COLUMNS = {"phone_number"}
 
     @staticmethod
@@ -34,7 +39,7 @@ class CSVService:
         """Parse CSV file into student records with batch assignments.
 
         Expected CSV format:
-            register_number,student_name,email,phone_number,semester_id,batch_id,cgpa
+            register_number,student_name,email,phone_number,cgpa,batch_name,semester_name
 
         Returns:
             List of validated StudentBatchAssignmentRow objects.
@@ -67,10 +72,10 @@ class CSVService:
                 raise CSVParsingError(row_num, "student_name cannot be empty")
             if not row_clean.get("email"):
                 raise CSVParsingError(row_num, "email cannot be empty")
-            if not row_clean.get("semester_id"):
-                raise CSVParsingError(row_num, "semester_id cannot be empty")
-            if not row_clean.get("batch_id"):
-                raise CSVParsingError(row_num, "batch_id cannot be empty")
+            if not row_clean.get("semester_name"):
+                raise CSVParsingError(row_num, "semester_name cannot be empty")
+            if not row_clean.get("batch_name"):
+                raise CSVParsingError(row_num, "batch_name cannot be empty")
             if not row_clean.get("cgpa"):
                 raise CSVParsingError(row_num, "cgpa cannot be empty")
 
@@ -80,8 +85,8 @@ class CSVService:
                     student_name=row_clean["student_name"],
                     email=row_clean["email"],
                     phone_number=row_clean.get("phone_number"),
-                    semester_id=int(row_clean["semester_id"]),
-                    batch_id=int(row_clean["batch_id"]),
+                    semester_name=row_clean["semester_name"],
+                    batch_name=row_clean["batch_name"],
                     cgpa=float(row_clean["cgpa"]),
                 )
                 records.append(record)

@@ -67,8 +67,8 @@ async def upload_students_csv(
                 "register_number": item["student"].register_number,
                 "student_name": item["student"].student_name,
                 "email": item["student"].email,
-                "semester_id": item["assignment"].semester_id,
-                "batch_id": item["assignment"].batch_id,
+                "semester_name": item["semester"].semester_name,
+                "batch_name": item["batch"].batch_name,
                 "cgpa": float(item["assignment"].cgpa),
             }
             for item in created
@@ -80,8 +80,8 @@ async def upload_students_csv(
             {
                 "register_number": f["payload"].register_number,
                 "email": f["payload"].email,
-                "semester_id": f["payload"].semester_id,
-                "batch_id": f["payload"].batch_id,
+                "semester_name": f["payload"].semester_name,
+                "batch_name": f["payload"].batch_name,
                 "error": f["error"],
             }
             for f in failed

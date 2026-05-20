@@ -14,7 +14,6 @@ from app.crud.swap_request import (
     get_assignments_by_register_number_for_update,
     get_active_swap_request_between,
     get_swap_request_for_update,
-    has_approved_request_for_assignments,
     has_accepted_request_for_assignments,
     list_swap_requests_for_assignments,
 )
@@ -225,16 +224,6 @@ async def create_swap_request_endpoint(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Student not found",
-        )
-
-    student_assignments = await get_all_student_assignments(db, student.register_number)
-    if await has_approved_request_for_assignments(
-        db,
-        [assignment.assignment_id for assignment in student_assignments],
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You already have an approved swap request and cannot create a new one",
         )
 
     requester = await get_assignment_by_id(db, payload.requester_assignment_id)

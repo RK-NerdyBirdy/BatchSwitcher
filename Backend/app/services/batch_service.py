@@ -1,4 +1,5 @@
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.batch import Batch
@@ -27,6 +28,7 @@ class BatchService:
 
         assignments_result = await db.execute(
             select(StudentSemesterAssignment)
+            .options(selectinload(StudentSemesterAssignment.student))
             .where(StudentSemesterAssignment.batch_id == batch_id)
             .order_by(StudentSemesterAssignment.register_number)
         )
@@ -44,6 +46,9 @@ class BatchService:
                     "register_number": a.register_number,
                     "student_name": a.student.student_name,
                     "email": a.student.email,
+                    "phone_number": a.student.phone_number,
+                    "batch_name": batch.batch_name,
+                    "semester_name": semester.semester_name if semester else None,
                     "cgpa": float(a.cgpa),
                     "active": a.active,
                 }

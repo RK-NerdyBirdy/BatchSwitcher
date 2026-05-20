@@ -215,23 +215,6 @@ async def has_accepted_request_for_assignments(
     return result.first() is not None
 
 
-async def has_approved_request_for_assignments(
-    db: AsyncSession,
-    assignment_ids: list[int],
-) -> bool:
-    if not assignment_ids:
-        return False
-
-    result = await db.execute(
-        select(SwapRequest.request_id).where(
-            or_(
-                SwapRequest.target_assignment_id.in_(assignment_ids),
-                SwapRequest.requester_assignment_id.in_(assignment_ids),
-            ),
-            SwapRequest.status == "APPROVED",
-        )
-    )
-    return result.first() is not None
 
 
 async def execute_batch_swap(
