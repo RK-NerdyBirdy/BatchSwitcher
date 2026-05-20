@@ -1,6 +1,9 @@
+import csv
+import io
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import get_password_hash, verify_password
@@ -393,6 +396,51 @@ async def export_batch(
             detail="Batch not found",
         )
     return result
+
+
+@router.get("/batches/{batch_id}/export-csv")
+async def export_batch_csv(
+    batch_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_admin: Admin = Depends(get_current_admin),
+) -> StreamingResponse:
+    from app.services.batch_service import batch_service
+    result = await batch_service.get_batch_export(db, batch_id)
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Batch not found",
+        )
+
+    output = io.StringIO()
+    fieldnames = [
+        "register_number",
+        "student_name",
+        "email",
+        "phone_number",
+        "cgpa",
+        "batch_name",
+        "semester_name",
+        "active",
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for student in result.get("students", []):
+        writer.writerow({
+            "register_number": student.get("register_number"),
+            "student_name": student.get("student_name"),
+            "email": student.get("email"),
+            "phone_number": student.get("phone_number"),
+            "cgpa": student.get("cgpa"),
+            "batch_name": student.get("batch_name"),
+            "semester_name": student.get("semester_name"),
+            "active": student.get("active"),
+        })
+
+    output.seek(0)
+    filename = f"batch_{batch_id}.csv"
+    headers = {"Content-Disposition": f"attachment; filename={filename}"}
+    return StreamingResponse(output, media_type="text/csv", headers=headers)
 
 
 @router.patch("/assignments/{assignment_id}")
