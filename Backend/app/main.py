@@ -22,7 +22,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",  # Allows your local frontend to connect
-        # "https://your-production-domain.vercel.app", # <-- Uncomment and add your real frontend URL later!
+        "https://batchxchange.vercel.app"
     ],
     allow_credentials=True,
     allow_methods=["*"],  # Allows all methods (GET, POST, PUT, DELETE, etc.)
