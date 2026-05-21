@@ -21,10 +21,32 @@ from app.models.admin import Admin
 from app.schemas.student import StudentCreate, StudentResponse
 from app.schemas.batch import SemesterCreate, SemesterResponse, BatchCreate, BatchResponse
 from app.schemas.admin import AdminChangePassword, AdminChangePasswordResponse
-from app.schemas.swap_request import SemesterSwapAllowedResponse, SwapRequestResponseWithDetails
+from app.schemas.swap_request import AssignmentResponse, SemesterSwapAllowedResponse, SwapRequestResponseWithDetails
 from app.services.csv_service import csv_service, CSVParsingError
 
 router = APIRouter(dependencies=[Depends(get_current_admin)])
+
+
+async def _build_assignment_response(
+    db: AsyncSession,
+    assignment: "StudentSemesterAssignment",
+) -> AssignmentResponse:
+    from app.crud.student import get_student
+    from app.crud.batch import get_batch
+
+    student = await get_student(db, assignment.register_number)
+    batch = await get_batch(db, assignment.batch_id)
+    return AssignmentResponse(
+        assignment_id=assignment.assignment_id,
+        register_number=assignment.register_number,
+        student_name=student.student_name if student else "Unknown",
+        semester_id=assignment.semester_id,
+        batch_id=assignment.batch_id,
+        batch_name=batch.batch_name if batch else "Unknown",
+        cgpa=float(assignment.cgpa),
+        active=assignment.active,
+        created_at=assignment.created_at,
+    )
 
 
 @router.post("/students/upload-csv", status_code=status.HTTP_202_ACCEPTED)
@@ -227,20 +249,34 @@ async def list_accepted_swap_requests_endpoint(
     current_admin: Admin = Depends(get_current_admin),
 ) -> list[SwapRequestResponseWithDetails]:
     accepted_requests = await list_accepted_swap_requests(db)
-    return [
-        SwapRequestResponseWithDetails(
-            request_id=request.request_id,
-            requester_assignment_id=request.requester_assignment_id,
-            target_assignment_id=request.target_assignment_id,
-            status=request.status,
-            approved_by=request.approved_by,
-            approved_at=request.approved_at,
-            created_at=request.created_at,
-            requester_assignment=request.requester_assignment,
-            target_assignment=request.target_assignment,
+    response: list[SwapRequestResponseWithDetails] = []
+    for request in accepted_requests:
+        requester_assignment = await get_assignment_by_id(db, request.requester_assignment_id)
+        target_assignment = await get_assignment_by_id(db, request.target_assignment_id)
+        requester_response = (
+            await _build_assignment_response(db, requester_assignment)
+            if requester_assignment
+            else None
         )
-        for request in accepted_requests
-    ]
+        target_response = (
+            await _build_assignment_response(db, target_assignment)
+            if target_assignment
+            else None
+        )
+        response.append(
+            SwapRequestResponseWithDetails(
+                request_id=request.request_id,
+                requester_assignment_id=request.requester_assignment_id,
+                target_assignment_id=request.target_assignment_id,
+                status=request.status,
+                approved_by=request.approved_by,
+                approved_at=request.approved_at,
+                created_at=request.created_at,
+                requester_assignment=requester_response,
+                target_assignment=target_response,
+            )
+        )
+    return response
 
 
 @router.patch("/change-password", response_model=AdminChangePasswordResponse)
@@ -317,6 +353,8 @@ async def approve_swap_request(
         await db.rollback()
         raise
 
+    requester_response = await _build_assignment_response(db, requester_assignment)
+    target_response = await _build_assignment_response(db, target_assignment)
     return SwapRequestResponseWithDetails(
         request_id=swap_request.request_id,
         requester_assignment_id=swap_request.requester_assignment_id,
@@ -325,8 +363,8 @@ async def approve_swap_request(
         approved_by=swap_request.approved_by,
         approved_at=swap_request.approved_at,
         created_at=swap_request.created_at,
-        requester_assignment=requester_assignment,
-        target_assignment=target_assignment,
+        requester_assignment=requester_response,
+        target_assignment=target_response,
     )
 
 
@@ -369,6 +407,8 @@ async def reject_swap_request(
         db, swap_request.target_assignment_id
     )
 
+    requester_response = await _build_assignment_response(db, requester_assignment)
+    target_response = await _build_assignment_response(db, target_assignment)
     return SwapRequestResponseWithDetails(
         request_id=swap_request.request_id,
         requester_assignment_id=swap_request.requester_assignment_id,
@@ -377,8 +417,8 @@ async def reject_swap_request(
         approved_by=swap_request.approved_by,
         approved_at=swap_request.approved_at,
         created_at=swap_request.created_at,
-        requester_assignment=requester_assignment,
-        target_assignment=target_assignment,
+        requester_assignment=requester_response,
+        target_assignment=target_response,
     )
 
 

@@ -6,8 +6,10 @@ from pydantic import BaseModel, ConfigDict
 class AssignmentResponse(BaseModel):
     assignment_id: int
     register_number: str
+    student_name: str
     semester_id: int
     batch_id: int
+    batch_name: str
     cgpa: float
     active: bool
     created_at: datetime
@@ -18,7 +20,9 @@ class AssignmentResponse(BaseModel):
 class StudentBatchInfoResponse(BaseModel):
     assignment_id: int
     register_number: str
+    student_name: str
     semester_id: int
+    batch_id: int
     batch_name: str
     cgpa: float
     active: bool
@@ -44,6 +48,7 @@ class SwapCandidateResponse(BaseModel):
     phone_number: str | None
     semester_id: int
     batch_id: int
+    batch_name: str
     cgpa: float
     active: bool
     created_at: datetime

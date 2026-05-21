@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select, text
+from sqlalchemy import select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.crud.student import get_student_by_email, get_student
 from app.models.student import Student
+from app.models.swap_request import SwapRequest
 from app.crud.swap_request import (
     create_swap_request as create_swap_request_crud,
     get_assignment_by_id,
@@ -17,7 +18,7 @@ from app.crud.swap_request import (
     has_accepted_request_for_assignments,
     list_swap_requests_for_assignments,
 )
-from app.crud.batch import get_semester
+from app.crud.batch import get_batch, get_semester
 from app.crud.batch import get_batch
 from app.models.student_semester_assignment import StudentSemesterAssignment
 from app.dependencies.student_auth import get_current_student
@@ -32,6 +33,25 @@ from app.schemas.swap_request import (
 from app.services.swap_service import swap_candidate_service
 
 router = APIRouter()
+
+
+async def _build_assignment_response(
+    db: AsyncSession,
+    assignment: StudentSemesterAssignment,
+) -> AssignmentResponse:
+    student = await get_student(db, assignment.register_number)
+    batch = await get_batch(db, assignment.batch_id)
+    return AssignmentResponse(
+        assignment_id=assignment.assignment_id,
+        register_number=assignment.register_number,
+        student_name=student.student_name if student else "Unknown",
+        semester_id=assignment.semester_id,
+        batch_id=assignment.batch_id,
+        batch_name=batch.batch_name if batch else "Unknown",
+        cgpa=float(assignment.cgpa),
+        active=assignment.active,
+        created_at=assignment.created_at,
+    )
 
 
 @router.get("/me", response_model=dict)
@@ -70,7 +90,9 @@ async def get_my_batch(
             StudentBatchInfoResponse(
                 assignment_id=assignment.assignment_id,
                 register_number=assignment.register_number,
+                student_name=student.student_name,
                 semester_id=assignment.semester_id,
+                batch_id=assignment.batch_id,
                 batch_name=batch.batch_name if batch else "Unknown",
                 cgpa=float(assignment.cgpa),
                 active=assignment.active,
@@ -152,6 +174,7 @@ async def get_my_eligible_swaps(
             candidate_list = []
             for c in candidates:
                 candidate_student = await get_student(db, c.register_number)
+                batch = await get_batch(db, c.batch_id)
                 candidate_list.append({
                     "assignment_id": c.assignment_id,
                     "register_number": c.register_number,
@@ -159,6 +182,7 @@ async def get_my_eligible_swaps(
                     "email": candidate_student.email if candidate_student else "",
                     "phone_number": candidate_student.phone_number if candidate_student else None,
                     "batch_id": c.batch_id,
+                    "batch_name": batch.batch_name if batch else "Unknown",
                     "cgpa": float(c.cgpa),
                 })
             eligible_by_semester[assignment.semester_id] = candidate_list
@@ -185,7 +209,35 @@ async def list_incoming_swap_requests(
 
     assignments = await get_all_student_assignments(db, student.register_number)
     assignment_ids = [assignment.assignment_id for assignment in assignments]
-    return await list_swap_requests_for_assignments(db, assignment_ids, incoming=True)
+    requests = await list_swap_requests_for_assignments(db, assignment_ids, incoming=True)
+    response: list[SwapRequestResponseWithDetails] = []
+    for request in requests:
+        requester_assignment = await get_assignment_by_id(db, request.requester_assignment_id)
+        target_assignment = await get_assignment_by_id(db, request.target_assignment_id)
+        requester_response = (
+            await _build_assignment_response(db, requester_assignment)
+            if requester_assignment
+            else None
+        )
+        target_response = (
+            await _build_assignment_response(db, target_assignment)
+            if target_assignment
+            else None
+        )
+        response.append(
+            SwapRequestResponseWithDetails(
+                request_id=request.request_id,
+                requester_assignment_id=request.requester_assignment_id,
+                target_assignment_id=request.target_assignment_id,
+                status=request.status,
+                approved_by=request.approved_by,
+                approved_at=request.approved_at,
+                created_at=request.created_at,
+                requester_assignment=requester_response,
+                target_assignment=target_response,
+            )
+        )
+    return response
 
 
 @router.get("/swap-requests/outgoing", response_model=list[SwapRequestResponseWithDetails])
@@ -203,7 +255,35 @@ async def list_outgoing_swap_requests(
 
     assignments = await get_all_student_assignments(db, student.register_number)
     assignment_ids = [assignment.assignment_id for assignment in assignments]
-    return await list_swap_requests_for_assignments(db, assignment_ids, incoming=False)
+    requests = await list_swap_requests_for_assignments(db, assignment_ids, incoming=False)
+    response: list[SwapRequestResponseWithDetails] = []
+    for request in requests:
+        requester_assignment = await get_assignment_by_id(db, request.requester_assignment_id)
+        target_assignment = await get_assignment_by_id(db, request.target_assignment_id)
+        requester_response = (
+            await _build_assignment_response(db, requester_assignment)
+            if requester_assignment
+            else None
+        )
+        target_response = (
+            await _build_assignment_response(db, target_assignment)
+            if target_assignment
+            else None
+        )
+        response.append(
+            SwapRequestResponseWithDetails(
+                request_id=request.request_id,
+                requester_assignment_id=request.requester_assignment_id,
+                target_assignment_id=request.target_assignment_id,
+                status=request.status,
+                approved_by=request.approved_by,
+                approved_at=request.approved_at,
+                created_at=request.created_at,
+                requester_assignment=requester_response,
+                target_assignment=target_response,
+            )
+        )
+    return response
 
 
 @router.post("/swap-requests", response_model=SwapRequestResponseWithDetails, status_code=status.HTTP_201_CREATED)
@@ -324,6 +404,8 @@ async def create_swap_request_endpoint(
                 detail="Database constraint violation",
             )
             raise translated_error from error
+    requester_response = await _build_assignment_response(db, requester)
+    target_response = await _build_assignment_response(db, target)
     return SwapRequestResponseWithDetails(
         request_id=swap_request.request_id,
         requester_assignment_id=swap_request.requester_assignment_id,
@@ -332,8 +414,8 @@ async def create_swap_request_endpoint(
         approved_by=swap_request.approved_by,
         approved_at=swap_request.approved_at,
         created_at=swap_request.created_at,
-        requester_assignment=requester,
-        target_assignment=target,
+        requester_assignment=requester_response,
+        target_assignment=target_response,
     )
 
 
@@ -421,7 +503,28 @@ async def accept_swap_request(
                 detail="One of the students already has an accepted swap request",
             )
 
+        requester_assignment_ids = []
+        requester_assignment_result = await db.execute(
+            select(StudentSemesterAssignment.assignment_id).where(
+                StudentSemesterAssignment.register_number == requester_assignment.register_number
+            )
+        )
+        requester_assignment_ids = [row[0] for row in requester_assignment_result.all()]
+
         swap_request.status = "ACCEPTED"
+        await db.flush()
+
+        # Cancel other outgoing requests from the requester
+        if requester_assignment_ids:
+            await db.execute(
+                update(SwapRequest)
+                .where(
+                    SwapRequest.request_id != request_id,
+                    SwapRequest.requester_assignment_id.in_(requester_assignment_ids),
+                    SwapRequest.status == "PENDING",
+                )
+                .values(status="CANCELLED")
+            )
         await db.flush()
         await db.commit()
     except HTTPException:
@@ -431,6 +534,8 @@ async def accept_swap_request(
         await db.rollback()
         raise
 
+    requester_response = await _build_assignment_response(db, requester_assignment)
+    target_response = await _build_assignment_response(db, target_assignment)
     return SwapRequestResponseWithDetails(
         request_id=swap_request.request_id,
         requester_assignment_id=swap_request.requester_assignment_id,
@@ -439,8 +544,8 @@ async def accept_swap_request(
         approved_by=swap_request.approved_by,
         approved_at=swap_request.approved_at,
         created_at=swap_request.created_at,
-        requester_assignment=requester_assignment,
-        target_assignment=target_assignment,
+        requester_assignment=requester_response,
+        target_assignment=target_response,
     )
 
 
@@ -500,6 +605,8 @@ async def reject_swap_request(
         await db.rollback()
         raise
 
+    requester_response = await _build_assignment_response(db, requester_assignment)
+    target_response = await _build_assignment_response(db, target_assignment)
     return SwapRequestResponseWithDetails(
         request_id=swap_request.request_id,
         requester_assignment_id=swap_request.requester_assignment_id,
@@ -508,8 +615,8 @@ async def reject_swap_request(
         approved_by=swap_request.approved_by,
         approved_at=swap_request.approved_at,
         created_at=swap_request.created_at,
-        requester_assignment=requester_assignment,
-        target_assignment=target_assignment,
+        requester_assignment=requester_response,
+        target_assignment=target_response,
     )
 
 
@@ -569,6 +676,8 @@ async def cancel_swap_request(
         await db.rollback()
         raise
 
+    requester_response = await _build_assignment_response(db, requester_assignment)
+    target_response = await _build_assignment_response(db, target_assignment)
     return SwapRequestResponseWithDetails(
         request_id=swap_request.request_id,
         requester_assignment_id=swap_request.requester_assignment_id,
@@ -577,6 +686,6 @@ async def cancel_swap_request(
         approved_by=swap_request.approved_by,
         approved_at=swap_request.approved_at,
         created_at=swap_request.created_at,
-        requester_assignment=requester_assignment,
-        target_assignment=target_assignment,
+        requester_assignment=requester_response,
+        target_assignment=target_response,
     )
