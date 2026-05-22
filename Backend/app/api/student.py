@@ -724,10 +724,11 @@ async def update_phone_number(
 
 @router.get("/directory", response_model=list[StudentDirectoryResponse])
 async def get_student_directory(
+    semester_id: int,
     db: AsyncSession = Depends(get_db),
     current_student: dict = Depends(get_current_student),
 ) -> list[StudentDirectoryResponse]:
-    """View batch info, name, reg no, and pfp for all active students."""
+    """View batch info, name, reg no, and pfp for all active students in a semester."""
     query = (
         select(
             Student.register_number,
@@ -740,7 +741,10 @@ async def get_student_directory(
         .join(StudentSemesterAssignment, Student.register_number == StudentSemesterAssignment.register_number)
         .join(Semester, StudentSemesterAssignment.semester_id == Semester.semester_id)
         .join(Batch, StudentSemesterAssignment.batch_id == Batch.batch_id)
-        .where(StudentSemesterAssignment.active == True)
+        .where(
+            StudentSemesterAssignment.active.is_(True),
+            StudentSemesterAssignment.semester_id == semester_id,
+        )
     )
     result = await db.execute(query)
     rows = result.all()
