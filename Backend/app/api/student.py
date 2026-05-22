@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select, text, update
+from sqlalchemy import select, text, update, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,8 +30,11 @@ from app.schemas.swap_request import (
     SwapRequestCreate,
     SwapRequestResponseWithDetails,
 )
-from app.schemas.student import PhoneNumberUpdate,PhoneStatusResponse
+from app.schemas.student import PhoneNumberUpdate,PhoneStatusResponse,StudentDirectoryResponse
 from app.services.swap_service import swap_candidate_service
+from app.models.semester import Semester
+from app.models.batch import Batch
+
 
 router = APIRouter()
 
@@ -307,24 +310,29 @@ async def create_swap_request_endpoint(
             detail="Student not found",
         )
 
-    requester = await get_assignment_by_id(db, payload.requester_assignment_id)
-    if not requester:
+    # 1. Deterministic locking of assignments to serialize with the accept flow
+    a_id = payload.requester_assignment_id
+    b_id = payload.target_assignment_id
+    first_id, second_id = (a_id, b_id) if a_id <= b_id else (b_id, a_id)
+
+    # These locks prevent race conditions if an 'accept' is happening simultaneously
+    await get_assignment_by_id_for_update(db, first_id)
+    await get_assignment_by_id_for_update(db, second_id)
+
+    # Fetch locked assignments
+    requester = await get_assignment_by_id(db, a_id)
+    target = await get_assignment_by_id(db, b_id)
+
+    if not requester or not target:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Requester assignment not found",
+            detail="One or both assignments not found",
         )
 
     if requester.register_number != student.register_number:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Requester assignment does not belong to current student",
-        )
-
-    target = await get_assignment_by_id(db, payload.target_assignment_id)
-    if not target:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Target assignment not found",
         )
 
     if requester.semester_id != target.semester_id:
@@ -357,54 +365,32 @@ async def create_swap_request_endpoint(
             detail="Target assignment is not eligible for swap",
         )
 
-    existing_request = await get_active_swap_request_between(
-        db,
-        requester.assignment_id,
-        target.assignment_id,
+    # 2. Strict One-Active Policy Check across ALL requests for BOTH students
+    active_check_stmt = select(SwapRequest.request_id).where(
+        or_(
+            SwapRequest.requester_assignment_id.in_([a_id, b_id]),
+            SwapRequest.target_assignment_id.in_([a_id, b_id])
+        ),
+        SwapRequest.status.in_(["PENDING", "ACCEPTED"])
     )
-    if existing_request:
+    active_check_result = await db.execute(active_check_stmt)
+    if active_check_result.first():
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A swap request already exists between these students",
+            # Frontend-friendly error
+            detail="Cannot send request: You or the target student already have an active swap request.",
         )
 
     try:
         swap_request = await create_swap_request_crud(db, payload)
     except IntegrityError as error:
         await db.rollback()
-        if "uq_swap_request_active_pair" in str(error.orig):
-            translated_error = HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="A swap request already exists between these students",
-            )
-            raise translated_error from error
-        if "swap_request_pkey" in str(error.orig):
-            await db.execute(
-                text(
-                    "SELECT setval("
-                    "pg_get_serial_sequence('swap_request','request_id'),"
-                    "COALESCE((SELECT MAX(request_id) FROM swap_request), 0)"
-                    ")"
-                )
-            )
-            await db.commit()
-            try:
-                swap_request = await create_swap_request_crud(db, payload)
-            except IntegrityError as retry_error:
-                await db.rollback()
-                translated_error = HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=(
-                        "Swap request id sequence was reset but insert still failed."
-                    ),
-                )
-                raise translated_error from retry_error
-        else:
-            translated_error = HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Database constraint violation",
-            )
-            raise translated_error from error
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            # Frontend-friendly error
+            detail="This swap request has already been created or processed.",
+        ) from error
+
     requester_response = await _build_assignment_response(db, requester)
     target_response = await _build_assignment_response(db, target)
     return SwapRequestResponseWithDetails(
@@ -412,12 +398,13 @@ async def create_swap_request_endpoint(
         requester_assignment_id=swap_request.requester_assignment_id,
         target_assignment_id=swap_request.target_assignment_id,
         status=swap_request.status,
-        approved_by=swap_request.approved_by,
-        approved_at=swap_request.approved_at,
         created_at=swap_request.created_at,
         requester_assignment=requester_response,
         target_assignment=target_response,
     )
+
+
+
 
 @router.patch("/swap-requests/{request_id}/accept", response_model=SwapRequestResponseWithDetails)
 async def accept_swap_request(
@@ -455,7 +442,6 @@ async def accept_swap_request(
         first_assignment = await get_assignment_by_id_for_update(db, first_id)
         second_assignment = await get_assignment_by_id_for_update(db, second_id)
 
-        # Map requester/target after locking
         if swap_request.target_assignment_id == first_assignment.assignment_id:
             target_assignment = first_assignment
             requester_assignment = second_assignment
@@ -476,8 +462,7 @@ async def accept_swap_request(
                 detail="Swaps are not allowed for this semester",
             )
 
-        # Lock both students to serialize accept operations per student
-        # Lock in deterministic order by register_number
+        # Lock both students
         reg_nums = sorted({requester_assignment.register_number, target_assignment.register_number})
         if reg_nums:
             for rn in reg_nums:
@@ -485,7 +470,6 @@ async def accept_swap_request(
                     select(Student).where(Student.register_number == rn).with_for_update()
                 )
 
-        # Gather all assignment_ids for BOTH students
         assignment_ids = set()
         result = await db.execute(
             select(StudentSemesterAssignment.assignment_id).where(
@@ -493,47 +477,46 @@ async def accept_swap_request(
             )
         )
         assignment_ids.update([row[0] for row in result.all()])
-        
+        assignment_ids_list = list(assignment_ids)
+
         has_active = await has_accepted_request_for_assignments(
             db,
-            list(assignment_ids),
+            assignment_ids_list,
             exclude_request_id=request_id,
         )
         if has_active:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="One of the students already has an accepted swap request",
+                # Frontend-friendly error
+                detail="Cannot accept: One of the students involved has already accepted a different swap request.",
             )
 
-        # 1. Update the current request to ACCEPTED
         swap_request.status = "ACCEPTED"
         await db.flush()
 
-        # 2. Cancel/Reject all OTHER pending requests for BOTH students
-        if assignment_ids:
-            assignment_ids_list = list(assignment_ids)
-            
-            # Cancel their outgoing requests
-            await db.execute(
-                update(SwapRequest)
+        # Safely fetch and lock all OTHER peripheral requests for BOTH students
+        if assignment_ids_list:
+            pending_requests_stmt = (
+                select(SwapRequest)
                 .where(
                     SwapRequest.request_id != request_id,
-                    SwapRequest.requester_assignment_id.in_(assignment_ids_list),
-                    SwapRequest.status == "PENDING",
+                    or_(
+                        SwapRequest.requester_assignment_id.in_(assignment_ids_list),
+                        SwapRequest.target_assignment_id.in_(assignment_ids_list)
+                    ),
+                    SwapRequest.status == "PENDING"
                 )
-                .values(status="CANCELLED")
+                .with_for_update()
             )
-            
-            # Reject their incoming requests
-            await db.execute(
-                update(SwapRequest)
-                .where(
-                    SwapRequest.request_id != request_id,
-                    SwapRequest.target_assignment_id.in_(assignment_ids_list),
-                    SwapRequest.status == "PENDING",
-                )
-                .values(status="REJECTED")
-            )
+            pending_requests_result = await db.execute(pending_requests_stmt)
+            pending_requests = pending_requests_result.scalars().all()
+
+            # Cancel outgoing, Reject incoming
+            for req in pending_requests:
+                if req.requester_assignment_id in assignment_ids_list:
+                    req.status = "CANCELLED"
+                else:
+                    req.status = "REJECTED"
 
         await db.flush()
         await db.commit()
@@ -551,8 +534,6 @@ async def accept_swap_request(
         requester_assignment_id=swap_request.requester_assignment_id,
         target_assignment_id=swap_request.target_assignment_id,
         status=swap_request.status,
-        approved_by=swap_request.approved_by,
-        approved_at=swap_request.approved_at,
         created_at=swap_request.created_at,
         requester_assignment=requester_response,
         target_assignment=target_response,
@@ -739,3 +720,37 @@ async def update_phone_number(
     await db.commit()
     
     return {"status": "success", "message": "Phone number updated successfully"}
+
+
+@router.get("/directory", response_model=list[StudentDirectoryResponse])
+async def get_student_directory(
+    db: AsyncSession = Depends(get_db),
+    current_student: dict = Depends(get_current_student),
+) -> list[StudentDirectoryResponse]:
+    """View batch info, name, reg no, and pfp for all active students."""
+    query = (
+        select(
+            Student.register_number,
+            Student.student_name,
+            Student.pfp_url,
+            Semester.semester_name,
+            Batch.batch_name
+        )
+        .select_from(Student)
+        .join(StudentSemesterAssignment, Student.register_number == StudentSemesterAssignment.register_number)
+        .join(Semester, StudentSemesterAssignment.semester_id == Semester.semester_id)
+        .join(Batch, StudentSemesterAssignment.batch_id == Batch.batch_id)
+        .where(StudentSemesterAssignment.active == True)
+    )
+    result = await db.execute(query)
+    rows = result.all()
+    
+    return [
+        StudentDirectoryResponse(
+            register_number=row.register_number,
+            student_name=row.student_name,
+            pfp_url=row.pfp_url,
+            semester_name=row.semester_name,
+            batch_name=row.batch_name
+        ) for row in rows
+    ]

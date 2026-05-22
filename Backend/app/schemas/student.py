@@ -26,3 +26,13 @@ class StudentResponse(StudentBase):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class StudentDirectoryResponse(BaseModel):
+    register_number: str
+    student_name: str
+    pfp_url: str | None
+    semester_name: str
+    batch_name: str
+    
+    model_config = ConfigDict(from_attributes=True)
