@@ -30,6 +30,7 @@ from app.schemas.swap_request import (
     SwapRequestCreate,
     SwapRequestResponseWithDetails,
 )
+from app.schemas.student import PhoneNumberUpdate,PhoneStatusResponse
 from app.services.swap_service import swap_candidate_service
 
 router = APIRouter()
@@ -418,7 +419,6 @@ async def create_swap_request_endpoint(
         target_assignment=target_response,
     )
 
-
 @router.patch("/swap-requests/{request_id}/accept", response_model=SwapRequestResponseWithDetails)
 async def accept_swap_request(
     request_id: int,
@@ -446,6 +446,7 @@ async def accept_swap_request(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Swap request is not pending",
             )
+            
         # Lock both assignment rows in deterministic order by assignment_id
         a_id = swap_request.requester_assignment_id
         b_id = swap_request.target_assignment_id
@@ -484,7 +485,7 @@ async def accept_swap_request(
                     select(Student).where(Student.register_number == rn).with_for_update()
                 )
 
-        # Gather all assignment_ids for both students
+        # Gather all assignment_ids for BOTH students
         assignment_ids = set()
         result = await db.execute(
             select(StudentSemesterAssignment.assignment_id).where(
@@ -492,6 +493,7 @@ async def accept_swap_request(
             )
         )
         assignment_ids.update([row[0] for row in result.all()])
+        
         has_active = await has_accepted_request_for_assignments(
             db,
             list(assignment_ids),
@@ -503,28 +505,36 @@ async def accept_swap_request(
                 detail="One of the students already has an accepted swap request",
             )
 
-        requester_assignment_ids = []
-        requester_assignment_result = await db.execute(
-            select(StudentSemesterAssignment.assignment_id).where(
-                StudentSemesterAssignment.register_number == requester_assignment.register_number
-            )
-        )
-        requester_assignment_ids = [row[0] for row in requester_assignment_result.all()]
-
+        # 1. Update the current request to ACCEPTED
         swap_request.status = "ACCEPTED"
         await db.flush()
 
-        # Cancel other outgoing requests from the requester
-        if requester_assignment_ids:
+        # 2. Cancel/Reject all OTHER pending requests for BOTH students
+        if assignment_ids:
+            assignment_ids_list = list(assignment_ids)
+            
+            # Cancel their outgoing requests
             await db.execute(
                 update(SwapRequest)
                 .where(
                     SwapRequest.request_id != request_id,
-                    SwapRequest.requester_assignment_id.in_(requester_assignment_ids),
+                    SwapRequest.requester_assignment_id.in_(assignment_ids_list),
                     SwapRequest.status == "PENDING",
                 )
                 .values(status="CANCELLED")
             )
+            
+            # Reject their incoming requests
+            await db.execute(
+                update(SwapRequest)
+                .where(
+                    SwapRequest.request_id != request_id,
+                    SwapRequest.target_assignment_id.in_(assignment_ids_list),
+                    SwapRequest.status == "PENDING",
+                )
+                .values(status="REJECTED")
+            )
+
         await db.flush()
         await db.commit()
     except HTTPException:
@@ -689,3 +699,43 @@ async def cancel_swap_request(
         requester_assignment=requester_response,
         target_assignment=target_response,
     )
+
+
+@router.get("/me/phone-status", response_model=PhoneStatusResponse)
+async def get_phone_status(
+    db: AsyncSession = Depends(get_db),
+    current_student: dict = Depends(get_current_student),
+) -> PhoneStatusResponse:
+    """Check if the current student has a phone number registered."""
+    email = current_student.get("email")
+    student = await get_student_by_email(db, email)
+    if not student:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Student not found",
+        )
+        
+    return PhoneStatusResponse(
+        has_phone_number=bool(student.phone_number and student.phone_number.strip())
+    )
+
+
+@router.patch("/me/phone", response_model=dict)
+async def update_phone_number(
+    payload: PhoneNumberUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_student: dict = Depends(get_current_student),
+) -> dict:
+    """Update the current student's phone number."""
+    email = current_student.get("email")
+    student = await get_student_by_email(db, email)
+    if not student:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Student not found",
+        )
+        
+    student.phone_number = payload.phone_number
+    await db.commit()
+    
+    return {"status": "success", "message": "Phone number updated successfully"}

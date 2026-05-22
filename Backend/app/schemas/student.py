@@ -14,7 +14,14 @@ class StudentBase(BaseModel):
 class StudentCreate(StudentBase):
     pass
 
+class PhoneStatusResponse(BaseModel):
+    has_phone_number: bool
 
+class PhoneNumberUpdate(BaseModel):
+    phone_number: str = Field(..., max_length=15)
+
+
+    
 class StudentResponse(StudentBase):
     created_at: datetime
 
