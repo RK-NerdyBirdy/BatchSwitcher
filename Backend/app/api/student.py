@@ -30,7 +30,13 @@ from app.schemas.swap_request import (
     SwapRequestCreate,
     SwapRequestResponseWithDetails,
 )
-from app.schemas.student import PhoneNumberUpdate,PhoneStatusResponse,StudentDirectoryResponse
+from app.schemas.student import (
+    PhoneNumberUpdate,
+    PhoneStatusResponse,
+    StudentDirectoryResponse,
+    StudentSwapLockResponse,
+    StudentSwapLockUpdate,
+)
 from app.services.swap_service import swap_candidate_service
 from app.models.semester import Semester
 from app.models.batch import Batch
@@ -67,6 +73,43 @@ async def get_me(
         "name": current_student.get("name"),
         "pfp": current_student.get("pfp"),
     }
+
+
+@router.get("/me/swap-lock", response_model=StudentSwapLockResponse)
+async def get_swap_lock_status(
+    db: AsyncSession = Depends(get_db),
+    current_student: dict = Depends(get_current_student),
+) -> StudentSwapLockResponse:
+    email = current_student.get("email")
+    student = await get_student_by_email(db, email)
+    if not student:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Student not found",
+        )
+
+    return StudentSwapLockResponse(swap_lock=student.swap_lock)
+
+
+@router.patch("/me/swap-lock", response_model=StudentSwapLockResponse)
+async def update_swap_lock_status(
+    payload: StudentSwapLockUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_student: dict = Depends(get_current_student),
+) -> StudentSwapLockResponse:
+    email = current_student.get("email")
+    student = await get_student_by_email(db, email)
+    if not student:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Student not found",
+        )
+
+    student.swap_lock = payload.swap_lock
+    await db.commit()
+    await db.refresh(student)
+
+    return StudentSwapLockResponse(swap_lock=student.swap_lock)
 
 
 @router.get("/me/batch", response_model=list[StudentBatchInfoResponse])
@@ -179,6 +222,9 @@ async def get_my_eligible_swaps(
             for c in candidates:
                 candidate_student = await get_student(db, c.register_number)
                 batch = await get_batch(db, c.batch_id)
+                if candidate_student and candidate_student.swap_lock:
+                    continue
+
                 candidate_list.append({
                     "assignment_id": c.assignment_id,
                     "register_number": c.register_number,

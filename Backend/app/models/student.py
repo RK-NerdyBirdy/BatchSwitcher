@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, func
+import sqlalchemy as sa
+from sqlalchemy import Boolean, DateTime, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -16,6 +17,11 @@ class Student(Base):
     email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     phone_number: Mapped[str | None] = mapped_column(String(15))
     pfp_url: Mapped[str | None] = mapped_column(String(512))
+    swap_lock: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=sa.text("false"),
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

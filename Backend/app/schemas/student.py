@@ -36,3 +36,11 @@ class StudentDirectoryResponse(BaseModel):
     batch_name: str
     
     model_config = ConfigDict(from_attributes=True)
+
+
+class StudentSwapLockResponse(BaseModel):
+    swap_lock: bool
+
+
+class StudentSwapLockUpdate(BaseModel):
+    swap_lock: bool
