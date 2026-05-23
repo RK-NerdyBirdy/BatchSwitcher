@@ -12,6 +12,9 @@ app = FastAPI(
     title="Batch Switcher API",
     description="Batch switching platform with student-admin coordination",
     version="1.0.0",
+    docs_url=None,    # Disables the /docs (Swagger UI)
+    redoc_url=None,   # Disables the /redoc endpoint
+    openapi_url=None,
 
 )
 
