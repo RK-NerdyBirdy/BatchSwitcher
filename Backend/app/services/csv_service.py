@@ -36,19 +36,10 @@ class CSVService:
 
     @staticmethod
     async def parse_csv(file_content: bytes) -> list[StudentBatchAssignmentRow]:
-        """Parse CSV file into student records with batch assignments.
-
-        Expected CSV format:
-            register_number,student_name,email,phone_number,cgpa,batch_name,semester_name
-
-        Returns:
-            List of validated StudentBatchAssignmentRow objects.
-
-        Raises:
-            CSVParsingError: On parsing or validation failures.
-        """
+        """Parse CSV file into student records with batch assignments."""
         try:
-            text = file_content.decode("utf-8")
+            # THE FIX: Use utf-8-sig to strip the invisible BOM character
+            text = file_content.decode("utf-8-sig")
         except UnicodeDecodeError:
             raise CSVParsingError(0, "File must be UTF-8 encoded")
 
@@ -56,14 +47,18 @@ class CSVService:
         if not reader.fieldnames:
             raise CSVParsingError(0, "CSV is empty or malformed")
 
-        fieldnames_set = set(reader.fieldnames)
+        # Strip whitespace from fieldnames just in case the CSV has spaces like " email"
+        fieldnames_cleaned = [f.strip() for f in reader.fieldnames if f]
+        fieldnames_set = set(fieldnames_cleaned)
+        
         if not CSVService.REQUIRED_COLUMNS.issubset(fieldnames_set):
             missing = CSVService.REQUIRED_COLUMNS - fieldnames_set
             raise CSVParsingError(0, f"Missing required columns: {', '.join(missing)}")
 
         records: list[StudentBatchAssignmentRow] = []
         for row_num, row in enumerate(reader, start=2):  # start=2 because row 1 is header
-            row_clean = {k: (v.strip() if v else None) for k, v in row.items()}
+            # Safely clean row keys and values
+            row_clean = {k.strip(): (v.strip() if v else None) for k, v in row.items() if k}
 
             # Validate required fields not empty
             if not row_clean.get("register_number"):
@@ -84,6 +79,7 @@ class CSVService:
                     register_number=row_clean["register_number"],
                     student_name=row_clean["student_name"],
                     email=row_clean["email"],
+                    # This will safely return None if the column doesn't exist at all
                     phone_number=row_clean.get("phone_number"),
                     semester_name=row_clean["semester_name"],
                     batch_name=row_clean["batch_name"],
